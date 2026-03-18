@@ -1,0 +1,87 @@
+
+# Docker Compose: run app + database + cache locally
+version: '3.8'
+
+services:
+  # PostgreSQL database for local development
+  postgres:
+    image: postgres:15-alpine
+    container_name: ecommerce-postgres
+    environment:
+      # Set superuser password
+      POSTGRES_PASSWORD: postgres
+      # Create database on startup
+      POSTGRES_DB: ecommerce
+    ports:
+      # Map host port 5432 to container port 5432
+      - "5432:5432"
+    volumes:
+      # Persist data between container restarts
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      # Verify database is ready to accept connections
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # Redis cache for session storage and rate limiting
+  redis:
+    image: redis:7-alpine
+    container_name: ecommerce-redis
+    ports:
+      # Map host port 6379 to container port 6379
+      - "6379:6379"
+    volumes:
+      # Persist cache data
+      - redis_data:/data
+    healthcheck:
+      # Verify Redis is responding to pings
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # E-commerce API application
+  app:
+    build:
+      # Build from current directory (where Dockerfile is)
+      context: .
+      dockerfile: Dockerfile
+    container_name: ecommerce-app
+    environment:
+      # Node environment mode
+      NODE_ENV: development
+      # Application environment label
+      ENVIRONMENT: local
+      # Port inside container (matches Dockerfile EXPOSE)
+      PORT: 80
+      # Database connection via Docker network
+      DB_PROXY_ENDPOINT: postgres
+      DB_NAME: ecommerce
+      DB_USERNAME: postgres
+      DB_PASSWORD: postgres
+      # Redis connection via Docker network
+      REDIS_ENDPOINT: redis
+      # JWT signing secret (weak for local only)
+      JWT_SECRET: local-dev-secret-change-in-production
+      # Allow all origins for local testing
+      CORS_ORIGIN: "*"
+    ports:
+      # Map host port 3000 to container port 80
+      - "3000:80"
+    depends_on:
+      # Wait for database and cache to be healthy before starting
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    # Automatically restart if container crashes
+    restart: unless-stopped
+
+# Named volumes for data persistence
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
