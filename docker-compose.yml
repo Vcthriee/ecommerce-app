@@ -1,7 +1,6 @@
 
 # Docker Compose: run app + database + cache locally
 version: '3.8'
-
 services:
   # PostgreSQL database for local development
   postgres:
