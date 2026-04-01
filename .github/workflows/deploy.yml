@@ -1,4 +1,3 @@
-
 name: Deploy Application
 
 on:
@@ -15,6 +14,7 @@ env:
   ECR_REPOSITORY: ecommerce-app-app
   ECS_CLUSTER: ecommerce-app-cluster
   ECS_SERVICE: ecommerce-app-service
+  ECS_TASK_DEFINITION: ecommerce-app-task
 
 jobs:
 
@@ -28,8 +28,6 @@ jobs:
           node-version: '18'
           cache: 'npm'
 
-      # Install ALL dependencies including devDependencies
-      # jest lives in devDependencies so we need the full install
       - run: npm ci
 
       - run: npm test
@@ -108,7 +106,7 @@ jobs:
       - name: Deploy to ECS
         run: |
           TASK_DEF=$(aws ecs describe-task-definition \
-            --task-definition ${{ env.ECS_CLUSTER }}-task \
+            --task-definition ${{ env.ECS_TASK_DEFINITION }} \
             --region ${{ env.AWS_REGION }} \
             --query 'taskDefinition' \
             --output json)
