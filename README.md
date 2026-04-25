@@ -5,7 +5,7 @@ Deployed on AWS EKS using Helm.
 
 ## App Images
 
-![Images](app-landing-page-image/app-landingpage-image.png) 
+![Images](app-landing-page-image/app-landingpage-image.svg) 
 
 ## Tech Stack
 
