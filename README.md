@@ -1,197 +1,161 @@
-
-
----
-
-## 3. ECOMMERCE-APP README
-
-```markdown
 # Ecommerce API
 
-Node.js REST API with automated deployment to AWS ECS.
+A production-ready RESTful ecommerce API built with Node.js and Express.
+Deployed on AWS EKS using Helm.
 
-## Features
+## App Images
 
-- Express.js REST API
-- PostgreSQL database via RDS Proxy
-- Redis caching for sessions
-- JWT authentication
-- Swagger API documentation at `/api-docs`
-- Docker containerization
-- CI/CD with GitHub Actions
+![Images](app-landing-page-image/app-landingpage-image.png) 
 
-## API Endpoints
+## Tech Stack
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/health` | Health check for ALB |
-| GET | `/` | API info |
-| GET | `/api/products` | List products |
-| POST | `/api/auth/login` | User login |
-| GET | `/api/orders` | List orders |
-| GET | `/api/categories` | List categories |
-| GET | `/api-docs` | Swagger UI documentation |
+- **Runtime:** Node.js
+- **Framework:** Express
+- **Database:** PostgreSQL (via Sequelize)
+- **Cache:** Redis (ElastiCache)
+- **Auth:** JWT
+- **Docs:** Swagger UI
+- **Container:** Docker
+- **Orchestration:** Kubernetes (EKS)
+- **Registry:** AWS ECR
+- **Deploy:** Helm
 
-## Quick Start
+## API Routes
 
-### Local Development
+| Method | Route | Description | Auth |
+|--------|-------|-------------|------|
+| POST | `/api/auth/register` | Register a new user | No |
+| POST | `/api/auth/login` | Login and get JWT token | No |
+| GET | `/api/products` | List all products | No |
+| GET | `/api/products/:id` | Get a single product | No |
+| POST | `/api/products` | Create a product | Yes |
+| PUT | `/api/products/:id` | Update a product | Yes |
+| DELETE | `/api/products/:id` | Delete a product | Yes |
+| GET | `/api/categories` | List all categories | No |
+| POST | `/api/orders` | Create an order | Yes |
+| GET | `/api/orders` | List user orders | Yes |
+| GET | `/api/health` | Health check | No |
+
+## Project Structure
+src/
+├── app.js              # Express app setup and Swagger
+├── config/
+│   ├── database.js     # PostgreSQL connection
+│   └── cache.js        # Redis connection
+├── middleware/
+│   ├── auth.js         # JWT authentication
+│   ├── errorHandler.js # Global error handler
+│   └── rateLimiter.js  # Rate limiting
+├── models/
+│   ├── user.js
+│   ├── product.js
+│   ├── category.js
+│   └── order.js
+└── routes/
+├── auth.js
+├── products.js
+├── categories.js
+├── orders.js
+└── health.js
+
+## Environment Variables
+
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `DATABASE_URL` | PostgreSQL connection string | `postgresql://user:pass@host:5432/db` |
+| `REDIS_ENDPOINT` | Redis connection string | `redis://host:6379` |
+| `JWT_SECRET` | Secret key for JWT signing | `your-secret-here` |
+| `NODE_ENV` | Environment | `production` |
+| `PORT` | Port the app listens on | `80` |
+
+## Local Development
 
 ```bash
 # Install dependencies
 npm install
 
-# Run tests
-npm test
+# Set environment variables
+cp .env.example .env
 
-# Run with Docker Compose (includes Postgres + Redis)
-docker-compose up
+# Run migrations
+node scripts/migrate.js
 
-# API available at http://localhost:3000
+# Start the server
+npm start
+```
 
-Manual Deployment
-bash
-Copy
+## Docker
 
-# Build image
-docker build -t ecommerce-app .
+```bash
+# Build the image
+docker build -t ecommerce-app:v1.0.0 .
 
-# Configure AWS
-aws configure
+# Run locally
+docker run -p 3000:80 \
+  -e DATABASE_URL=your-db-url \
+  -e REDIS_ENDPOINT=your-redis-url \
+  -e JWT_SECRET=your-secret \
+  ecommerce-app:v1.0.0
+```
 
-# Login to ECR
+## Deployment to AWS EKS
+
+### Prerequisites
+- AWS CLI configured
+- kubectl configured for your EKS cluster
+- Helm installed
+- Docker installed
+
+### Push image to ECR
+
+```bash
+# Authenticate Docker to ECR
 aws ecr get-login-password --region af-south-1 | \
   docker login --username AWS --password-stdin \
   904690835870.dkr.ecr.af-south-1.amazonaws.com
 
-# Tag and push
-docker tag ecommerce-app:latest \
-  904690835870.dkr.ecr.af-south-1.amazonaws.com/ecommerce-app-app:latest
+# Build and tag
+docker build -t ecommerce-app:v1.0.0 .
+docker tag ecommerce-app:v1.0.0 \
+  904690835870.dkr.ecr.af-south-1.amazonaws.com/ecommerce-app:v1.0.0
 
+# Push
 docker push \
-  904690835870.dkr.ecr.af-south-1.amazonaws.com/ecommerce-app-app:latest
+  904690835870.dkr.ecr.af-south-1.amazonaws.com/ecommerce-app:v1.0.0
+```
 
-# Update ECS
-aws ecs update-service \
-  --cluster ecommerce-app-cluster \
-  --service ecommerce-app-service \
-  --force-new-deployment \
-  --region af-south-1
+### Create Kubernetes secrets
 
-Automated Deployment (GitHub Actions)
-Table
-Branch	What Happens
-dev	Test → Build → Push image to ECR
-main	Test → Build → Push → Deploy to ECS
-Deploy via Git Push
-bash
-Copy
+```bash
+kubectl create secret generic db-credentials \
+  --namespace ecommerce-app \
+  --from-literal=DATABASE_URL=your-database-url \
+  --from-literal=REDIS_ENDPOINT=your-redis-url \
+  --from-literal=JWT_SECRET=your-jwt-secret
+```
 
-# Deploy to dev (build only)
-git checkout dev
-git push origin dev
+### Deploy with Helm
 
-# Deploy to production (build + deploy)
-git checkout main
-git merge dev
-git push origin main
+```bash
+helm upgrade --install ecommerce-app ./helm/ecommerce \
+  --namespace ecommerce-app \
+  --create-namespace
+```
 
-Watch deployment at: https://github.com/Vcthriee/ecommerce-app/actions
-CI/CD Pipeline Flow
-plain
-Copy
+### Verify deployment
 
-Push to main
-    │
-    ▼
-┌─────────┐
-│  Test   │  ← npm test (Jest)
-└────┬────┘
-     │
-     ▼
-┌─────────┐
-│  Build  │  ← Docker build
-└────┬────┘
-     │
-     ▼
-┌─────────┐
-│  Push   │  ← ECR push
-└────┬────┘
-     │
-     ▼
-┌─────────┐
-│ Verify  │  ← Check ECS infrastructure exists
-└────┬────┘
-     │
-     ▼
-┌─────────┐
-│ Deploy  │  ← Update ECS service
-└─────────┘
+```bash
+kubectl get pods -n ecommerce-app
+kubectl get svc -n ecommerce-app
+```
 
-Environment Variables
-ECS injects these at runtime:
-Table
-Variable	Source	Description
-DB_PROXY_ENDPOINT	ECS Task Def	Database host
-DB_NAME	ECS Task Def	Database name
-DB_USERNAME	ECS Task Def	Database user
-DB_PASSWORD	Secrets Manager	Database password
-REDIS_ENDPOINT	ECS Task Def	Redis host
-JWT_SECRET	Secrets Manager	JWT signing key
-ENVIRONMENT	ECS Task Def	dev/prod
-Project Structure
-plain
-Copy
+## API Documentation
 
-ecommerce-app/
-├── .github/
-│   └── workflows/
-│       └── deploy.yml          # CI/CD pipeline
-├── src/
-│   ├── app.js                  # Express setup
-│   ├── routes/
-│   │   ├── health.js           # Health check
-│   │   ├── auth.js             # Authentication
-│   │   ├── products.js         # Product API
-│   │   ├── orders.js           # Order API
-│   │   └── categories.js       # Category API
-│   └── middleware/
-│       ├── errorHandler.js     # Global error handling
-│       └── auth.js             # JWT verification
-├── Dockerfile                  # Container image
-├── docker-compose.yml          # Local development stack
-├── package.json
-└── README.md
+Swagger UI is available at:
+http://<your-loadbalancer-url>/api-docs
 
-Infrastructure Dependency
-This application requires ecommerce-infra to be deployed first:
+## Health Check
 
-    ECS cluster and service
-    RDS PostgreSQL database
-    ElastiCache Redis
-    Application Load Balancer
-    ECR repository
-    VPC and security groups
-
-Health Check
-The app exposes a health endpoint for the ALB:
-bash
-Copy
-
-curl http://ecommerce-app-alb-886182432.af-south-1.elb.amazonaws.com/health
-
-Response:
-JSON
-Copy
-
-{"status":"healthy","timestamp":"2026-03-28T20:02:35.853Z","environment":"dev"}
-
-Tech Stack
-
-    Runtime: Node.js 18
-    Framework: Express.js
-    Database: PostgreSQL 15 (via RDS Proxy)
-    Cache: Redis 7 (ElastiCache)
-    Auth: JWT
-    Docs: Swagger/OpenAPI
-    Container: Docker
-    Orchestration: AWS ECS Fargate
-    CI/CD: GitHub Actions
+```bash
+curl http://<your-loadbalancer-url>/api/health
+```

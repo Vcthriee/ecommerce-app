@@ -1,137 +1,212 @@
+# The name of this GitHub Actions workflow, appears in the GitHub UI
 name: Deploy Application
 
+# Defines when this workflow should run
 on:
+  # Trigger on git push events
   push:
+    # Only run when pushing to these specific branches
     branches: [main, dev]
 
+# Sets permissions for the GitHub Actions token
 permissions:
+  # Allows this workflow to request OIDC tokens (needed for AWS IAM role assumption)
   id-token: write
+  # Allows reading repository contents (needed to checkout code)
   contents: read
 
+# Environment variables available to all jobs in this workflow
 env:
+  # The AWS region where your infrastructure is deployed
   AWS_REGION: af-south-1
+  # The URL of your Elastic Container Registry (ECR)
   ECR_REGISTRY: 904690835870.dkr.ecr.af-south-1.amazonaws.com
-  ECR_REPOSITORY: ecommerce-app-app
-  ECS_CLUSTER: ecommerce-app-cluster
-  ECS_SERVICE: ecommerce-app-service
-  ECS_TASK_DEFINITION: ecommerce-app-task
+  # The name of your ECR repository where Docker images are stored
+  ECR_REPOSITORY: ecommerce-app
+  # The name of your EKS cluster (must match what you created in Terraform)
+  EKS_CLUSTER_NAME: ecommerce-app-cluster
 
+# Jobs are the individual units of work that run in parallel by default
 jobs:
 
+  # ============================================
+  # JOB 1: TEST
+  # ============================================
+  # This job runs your application's test suite
   test:
+    # Specifies the type of machine to run this job on
     runs-on: ubuntu-latest
+    
+    # Steps are individual tasks that run sequentially within a job
     steps:
+      # Step 1: Checkout your code from the repository
+      # Uses the official GitHub checkout action (version 4)
       - uses: actions/checkout@v4
 
+      # Step 2: Setup Node.js environment
+      # Uses the official GitHub Node.js setup action
       - uses: actions/setup-node@v4
+        # Parameters for the setup-node action
         with:
+          # Specifies which Node.js version to install
           node-version: '18'
+          # Enables caching for npm dependencies to speed up future runs
           cache: 'npm'
 
+      # Step 3: Install all dependencies
+      # 'npm ci' is like 'npm install' but meant for CI (clean install)
+      # It installs exact versions from package-lock.json
       - run: npm ci
 
+      # Step 4: Run the test suite defined in your package.json
+      # This executes your tests (jest, mocha, etc.)
       - run: npm test
 
+  # ============================================
+  # JOB 2: BUILD
+  # ============================================
+  # This job builds your Docker image and pushes it to ECR
   build:
+    # Run on Ubuntu machine
     runs-on: ubuntu-latest
+    
+    # This job depends on the 'test' job completing successfully first
+    # If tests fail, this job won't run
     needs: test
+    
+    # Define outputs that other jobs can use
+    # This allows the deploy job to know which image tag was built
     outputs:
+      # Sets an output named 'image_tag' from a step named 'meta'
+      # The ${{ }} syntax is GitHub Actions expression syntax
       image_tag: ${{ steps.meta.outputs.image_tag }}
+    
     steps:
+      # Step 1: Checkout code from repository
       - uses: actions/checkout@v4
 
+      # Step 2: Configure AWS credentials using OIDC (secure, no long-term keys)
       - name: Configure AWS credentials
+        # Uses the official AWS credentials action
         uses: aws-actions/configure-aws-credentials@v4
         with:
+          # The ARN of the IAM role that GitHub Actions can assume
+          # This role was created in your Terraform and allows ECR/EKS access
           role-to-assume: arn:aws:iam::904690835870:role/GithubActionsOIDCROLE
+          # The AWS region to operate in (references the env variable above)
           aws-region: ${{ env.AWS_REGION }}
 
+      # Step 3: Login to Amazon ECR
+      # This authenticates Docker to push/pull from your ECR registry
       - uses: aws-actions/amazon-ecr-login@v2
 
+      # Step 4: Generate a unique image tag based on the git commit SHA
       - name: Set image tag
+        # Give this step an ID so we can reference its outputs later
         id: meta
+        # Run a shell script to create the tag
         run: |
+          # Get the full git commit SHA from GitHub context
+          # Cut the first 8 characters to make a short SHA (e.g., "a1b2c3d4")
           IMAGE_TAG=$(echo ${{ github.sha }} | cut -c1-8)
+          
+          # Write the image tag to GitHub Actions output
+          # $GITHUB_OUTPUT is a special file GitHub uses to capture outputs
           echo "image_tag=${IMAGE_TAG}" >> $GITHUB_OUTPUT
 
+      # Step 5: Build the Docker image and push to ECR
       - name: Build and push image
+        # Multi-line shell script
         run: |
+          # Build the Docker image from the Dockerfile in current directory (.)
+          # -t flag tags the image with: registry/repository:tag
           docker build \
-            -t ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ steps.meta.outputs.image_tag }} \
-            -t ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:latest \
+            -t ${{ env.ECR_REGISTRY }}/${{ env.CR_REPOSITORY }}:${{ steps.meta.outputs.image_tag }} \
             .
+          
+          # Also tag the same image as 'latest' for convenience
+          docker tag \
+            ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ steps.meta.outputs.image_tag }} \
+            ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:latest
+          
+          # Push the versioned image tag to ECR
           docker push ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ steps.meta.outputs.image_tag }}
+          
+          # Push the 'latest' tag to ECR
           docker push ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:latest
 
-  verify-infra:
-    runs-on: ubuntu-latest
-    needs: build
-    if: github.ref == 'refs/heads/main'
-    steps:
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: arn:aws:iam::904690835870:role/GithubActionsOIDCROLE
-          aws-region: ${{ env.AWS_REGION }}
-
-      - name: Check ECS service exists
-        run: |
-          STATUS=$(aws ecs describe-services \
-            --cluster ${{ env.ECS_CLUSTER }} \
-            --services ${{ env.ECS_SERVICE }} \
-            --region ${{ env.AWS_REGION }} \
-            --query 'services[0].status' \
-            --output text 2>/dev/null || echo "MISSING")
-
-          if [ "$STATUS" != "ACTIVE" ]; then
-            echo "❌ Infrastructure not ready. Deploy ecommerce-infra first."
-            exit 1
-          fi
-
-          echo "✅ ECS service is active"
-
+  # ============================================
+  # JOB 3: DEPLOY
+  # ============================================
+  # This job deploys your new image to the Kubernetes cluster
   deploy:
+    # Run on Ubuntu machine
     runs-on: ubuntu-latest
-    needs: [build, verify-infra]
+    
+    # This job needs both 'build' and 'test' to complete first
+    # 'test' is implied because 'build' already needs it
+    needs: [build, test]
+    
+    # Only run this job when pushing to the main branch
+    # The 'if' condition prevents deploying from dev branch
     if: github.ref == 'refs/heads/main'
+    
     steps:
+      # Step 1: Checkout code from repository
       - uses: actions/checkout@v4
 
+      # Step 2: Authenticate with AWS (same as in build job)
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
+          # Same IAM role ARN for EKS access
           role-to-assume: arn:aws:iam::904690835870:role/GithubActionsOIDCROLE
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Deploy to ECS
+      # Step 3: Configure kubectl to talk to your EKS cluster
+      - name: Update kubeconfig for EKS
         run: |
-          TASK_DEF=$(aws ecs describe-task-definition \
-            --task-definition ${{ env.ECS_TASK_DEFINITION }} \
+          # The AWS CLI command to update your local kubeconfig file
+          # This allows kubectl to authenticate with your EKS cluster
+          # --region: specifies which region your cluster is in
+          # --name: specifies which EKS cluster to connect to
+          aws eks update-kubeconfig \
             --region ${{ env.AWS_REGION }} \
-            --query 'taskDefinition' \
-            --output json)
+            --name ${{ env.EKS_CLUSTER_NAME }}
 
-          NEW_TASK_DEF=$(echo $TASK_DEF | jq \
-            --arg IMAGE "${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ needs.build.outputs.image_tag }}" \
-            '.containerDefinitions[0].image = $IMAGE
-            | del(.taskDefinitionArn, .revision, .status, .requiresAttributes, .compatibilities, .registeredAt, .registeredBy)')
-
-          NEW_TASK_ARN=$(aws ecs register-task-definition \
-            --region ${{ env.AWS_REGION }} \
-            --cli-input-json "$NEW_TASK_DEF" \
-            --query 'taskDefinition.taskDefinitionArn' \
-            --output text)
-
-          aws ecs update-service \
-            --cluster ${{ env.ECS_CLUSTER }} \
-            --service ${{ env.ECS_SERVICE }} \
-            --task-definition $NEW_TASK_ARN \
-            --region ${{ env.AWS_REGION }}
-
-      - name: Wait for stabilization
+      # Step 4: Update the running application with the new image
+      - name: Update Kubernetes deployment with new image
         run: |
-          aws ecs wait services-stable \
-            --cluster ${{ env.ECS_CLUSTER }} \
-            --services ${{ env.ECS_SERVICE }} \
-            --region ${{ env.AWS_REGION }}
+          # Use kubectl to update the image in your deployment
+          # 'set image' changes the container image for a deployment
+          # deployment/ecommerce-app: the name of your Kubernetes deployment
+          # ecommerce-app=: the container name within the pod
+          # The new image URL with the tag from the build job
+          # -n ecommerce-app: the Kubernetes namespace to operate in
+          # --record: records this change in the deployment history
+          kubectl set image deployment/ecommerce-app \
+            ecommerce-app=${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ needs.build.outputs.image_tag }} \
+            -n ecommerce-app --record
+
+      # Step 5: Wait for the deployment to complete successfully
+      - name: Wait for deployment rollout
+        run: |
+          # kubectl rollout status waits until the deployment is complete
+          # It checks that new pods are ready and old pods are terminated
+          # --timeout=300s: fail if it takes longer than 5 minutes
+          kubectl rollout status deployment/ecommerce-app \
+            -n ecommerce-app \
+            --timeout=300s
+          
+          # Print success message when rollout completes
           echo "✅ Deployment complete"
+
+      # Step 6: Verify the deployment is working
+      - name: Verify deployment
+        run: |
+          # Show all pods in the namespace to see their status
+          # This helps debug if something went wrong
+          kubectl get pods -n ecommerce-app
+          
+          # Show all services to confirm they're running
+          kubectl get svc -n ecommerce-app
